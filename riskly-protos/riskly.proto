@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package riskly;
+
+import "google/protobuf/empty.proto";
+
+service Riskly {
+  // Trade-related actions
+  rpc EvaluateTrade (Trade) returns (TradeEvaluationResponse);
+  rpc AddTrade (Trade) returns (Ack);
+  rpc AddOrder (OpenOrder) returns (Ack);
+  rpc RemoveOrder (RemoveOrderRequest) returns (Ack);
+
+  // State queries
+  rpc GetState (Empty) returns (RisklyState);
+  rpc GetCurrentPosition (AssetRequest) returns (PositionResponse);
+  rpc GetOpenOrders (Empty) returns (OpenOrdersResponse);
+  rpc GetDailyVolume (AssetRequest) returns (DailyVolumeResponse);
+  rpc StreamState (Empty) returns (stream RisklyState);
+
+
+  // Housekeeping
+  rpc ResetDailyLimits (Empty) returns (Ack);
+  rpc UpdateMarketValue (PriceUpdateRequest) returns (Ack);
+
+  // Control
+  rpc DisableTrading (Empty) returns (Ack);
+  rpc EnableTrading (Empty) returns (Ack);
+  rpc IsTradingEnabled (Empty) returns (TradingStatusResponse);
+}
+
+// === Shared Types ===
+
+message Empty {}
+
+message Ack {
+  bool success = 1;
+  string message = 2;
+}
+
+// === Trade ===
+
+message Trade {
+  string asset = 1;
+  double quantity = 2;
+  double price = 3;
+  TradeSide side = 4;
+  uint64 timestamp = 5;
+}
+
+enum TradeSide {
+  BUY = 0;
+  SELL = 1;
+}
+
+message TradeEvaluationResponse {
+  bool allowed = 1;
+  string reason = 2;
+}
+
+// === Orders ===
+
+message OpenOrder {
+  string order_id = 1;
+  string asset = 2;
+  double quantity = 3;
+  double price = 4;
+}
+
+message RemoveOrderRequest {
+  string order_id = 1;
+}
+
+message OpenOrdersResponse {
+  repeated OpenOrder open_orders = 1;
+}
+
+// === State ===
+
+message RisklyState {
+  map<string, double> current_positions = 1;
+  repeated OpenOrder open_orders = 2;
+  map<string, double> daily_volume = 3;
+  double portfolio_value_usd = 4;
+  double pnl_realized = 5;
+  double pnl_unrealized = 6;
+}
+
+// === Query Requests and Responses ===
+
+message AssetRequest {
+  string asset = 1;
+}
+
+message PositionResponse {
+  string asset = 1;
+  double quantity = 2;
+}
+
+message DailyVolumeResponse {
+  string asset = 1;
+  double volume = 2;
+}
+
+message PriceUpdateRequest {
+  map<string, double> asset_prices = 1;
+}
+
+message TradingStatusResponse {
+  bool enabled = 1;
+}
