@@ -4,7 +4,7 @@ use tonic::{async_trait, Response};
 
 use crate::config::RisklyConfig;
 use crate::riskly::riskly_server::{Riskly, RisklyServer};
-use crate::riskly::TradeEvaluationResponse;
+use crate::riskly::{Ack, TradeEvaluationResponse};
 use crate::riskly_service::RisklyService;
 
 pub mod riskly {
@@ -23,33 +23,46 @@ impl Riskly for RisklyService {
     ) -> Result<tonic::Response<riskly::TradeEvaluationResponse>, tonic::Status> {
         let start_time = Instant::now();
         let trade_inner = trade.into_inner();
-        
+
         let result = match self.evaluate_trade(trade_inner).await {
-            Ok(()) => {
-                Ok(Response::new(TradeEvaluationResponse {
-                    allowed: true,
-                    reason: "allowed".to_string(),
-                }))
-            }
-            Err(err) => {
-                Ok(Response::new(TradeEvaluationResponse {
-                    allowed: false,
-                    reason: err.to_string(),
-                }))
-            }
+            Ok(()) => Ok(Response::new(TradeEvaluationResponse {
+                allowed: true,
+                reason: "allowed".to_string(),
+            })),
+            Err(err) => Ok(Response::new(TradeEvaluationResponse {
+                allowed: false,
+                reason: err.to_string(),
+            })),
         };
-        
+
         let duration = start_time.elapsed();
         println!("evaluate_trade endpoint took: {:?}", duration);
-        
+
         result
     }
 
     async fn add_trade(
         &self,
-        _request: tonic::Request<riskly::Trade>,
+        trade: tonic::Request<riskly::Trade>,
     ) -> Result<tonic::Response<riskly::Ack>, tonic::Status> {
-        unimplemented!()
+        let start_time = Instant::now();
+        let trade_inner = trade.into_inner();
+
+        let result = match self.add_trade(trade_inner).await {
+            Ok(()) => Ok(Response::new(Ack {
+                success: true,
+                message: "Trade added successfully".to_string(),
+            })),
+            Err(err) => Ok(Response::new(Ack {
+                success: false,
+                message: err.to_string(),
+            })),
+        };
+
+        let duration = start_time.elapsed();
+        println!("add_trade endpoint took: {:?}", duration);
+
+        result
     }
 
     async fn add_order(
@@ -95,13 +108,16 @@ impl Riskly for RisklyService {
     }
 
     type StreamStateStream =
-        tokio_stream::wrappers::ReceiverStream<Result<riskly::RisklyState, tonic::Status>>;
+        tokio_stream::wrappers::WatchStream<Result<riskly::RisklyState, tonic::Status>>;
 
     async fn stream_state(
         &self,
         _request: tonic::Request<riskly::Empty>,
     ) -> Result<tonic::Response<Self::StreamStateStream>, tonic::Status> {
-        unimplemented!()
+        let rx = self.state_rx.clone();
+
+        let stream = tokio_stream::wrappers::WatchStream::new(rx);
+        Ok(Response::new(stream))
     }
 
     async fn reset_daily_limits(

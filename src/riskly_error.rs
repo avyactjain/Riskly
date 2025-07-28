@@ -6,6 +6,7 @@ pub enum RisklyError {
     ExceedsMaxPosition(String),
     ExceedsDailyVolume(String),
     ExceedsMaxAllocation(String),
+    InvalidTradeSide(String),
 }
 
 impl fmt::Display for RisklyError {
@@ -18,6 +19,7 @@ impl fmt::Display for RisklyError {
             RisklyError::ExceedsMaxPosition(msg) => write!(f, "Exceeds max position: {msg}"),
             RisklyError::ExceedsDailyVolume(msg) => write!(f, "Exceeds daily volume: {msg}"),
             RisklyError::ExceedsMaxAllocation(msg) => write!(f, "Exceeds max allocation: {msg}"),
+            RisklyError::InvalidTradeSide(msg) => write!(f, "Invalid trade side: {msg}"),
         }
     }
 }
