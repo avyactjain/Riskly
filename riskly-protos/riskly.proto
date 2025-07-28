@@ -81,9 +81,6 @@ message RisklyState {
   map<string, double> current_positions = 1;
   repeated OpenOrder open_orders = 2;
   map<string, double> daily_volume = 3;
-  double portfolio_value_usd = 4;
-  double pnl_realized = 5;
-  double pnl_unrealized = 6;
 }
 
 // === Query Requests and Responses ===

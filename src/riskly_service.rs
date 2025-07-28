@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{watch, Mutex};
 
 use crate::{
     config::RisklyConfig,
@@ -12,27 +12,24 @@ use crate::{
 pub struct RisklyService {
     config: Arc<RisklyConfig>,
     pub state: Arc<Mutex<RisklyState>>,
-    pub state_rx: Arc<Mutex<Option<mpsc::Receiver<RisklyState>>>>,
-    pub state_tx: mpsc::Sender<RisklyState>,
+    pub state_rx: watch::Receiver<Result<RisklyState, tonic::Status>>,
+    pub state_tx: watch::Sender<Result<RisklyState, tonic::Status>>,
 }
 
 impl RisklyService {
     pub fn new(config: RisklyConfig) -> Self {
-        let (state_tx, state_rx) = mpsc::channel::<RisklyState>(1);
-
         let state = RisklyState {
             current_positions: HashMap::new(),
             open_orders: vec![],
             daily_volume: HashMap::new(),
-            portfolio_value_usd: 0.0,
-            pnl_realized: 0.0,
-            pnl_unrealized: 0.0,
         };
+
+        let (state_tx, state_rx) = watch::channel(Ok(state.clone()));
 
         Self {
             config: Arc::new(config),
             state: Arc::new(Mutex::new(state)),
-            state_rx: Arc::new(Mutex::new(Some(state_rx))),
+            state_rx,
             state_tx,
         }
     }
@@ -73,9 +70,11 @@ impl RisklyService {
         let new_position = match trade.side {
             0 => current_position + quantity,
             1 => current_position - quantity,
-            //Todo : Remove _
             _ => {
-                return Err(RisklyError::DisallowedAsset("s".to_owned()));
+                return Err(RisklyError::InvalidTradeSide(format!(
+                    "Unknown trade side: {}",
+                    trade.side
+                )));
             }
         };
 
@@ -103,34 +102,73 @@ impl RisklyService {
         }
         let volume_check_duration = volume_check_start.elapsed();
 
-        // 5. (Optional) Check portfolio allocation
-        let allocation_check_start = Instant::now();
-        if let Some(max_alloc_pct) = self.config.max_allocation_per_asset_pct.get(&asset) {
-            let portfolio_value = state.portfolio_value_usd;
-            let asset_value_after_trade = new_position * trade.price;
-
-            if portfolio_value > 0.0 {
-                let allocation_pct = asset_value_after_trade / portfolio_value;
-                if allocation_pct > *max_alloc_pct {
-                    return Err(RisklyError::ExceedsMaxAllocation(format!(
-                        "Allocation {allocation_pct:.2} > max {max_alloc_pct:.2} for {asset}"
-                    )));
-                }
-            }
-        }
-        let allocation_check_duration = allocation_check_start.elapsed();
-
         let checks_duration = checks_start.elapsed();
         let total_duration = start_time.elapsed();
 
         println!(
-            "evaluate_trade business logic for {}: total={:?}, state_lock={:?}, checks={:?} (asset={:?}, size={:?}, position={:?}, volume={:?}, allocation={:?})",
-            asset, total_duration, state_lock_duration, checks_duration,
-            asset_check_duration, size_check_duration, position_check_duration,
-            volume_check_duration, allocation_check_duration
+            "evaluate_trade business logic for {asset}: total={total_duration:?}, state_lock={state_lock_duration:?}, checks={checks_duration:?} (asset={asset_check_duration:?}, size={size_check_duration:?}, position={position_check_duration:?},  volume={volume_check_duration:?})",
         );
 
         // If all checks pass
+        Ok(())
+    }
+
+    pub async fn add_trade(&self, trade: Trade) -> Result<(), RisklyError> {
+        // need to first evaluate the trade.
+        self.evaluate_trade(trade.clone()).await?;
+
+        // Need to update state in this function.
+
+        //1. Acquire lock to the state.
+        let mut current_state = self.state.lock().await;
+
+        let current_position = current_state.current_positions.get_mut(&trade.asset);
+
+        if let Some(quantity) = current_position {
+            // position of that asset exists in the state
+            match trade.side {
+                0 => *quantity += trade.quantity,
+                1 => *quantity -= trade.quantity,
+                _ => {
+                    return Err(RisklyError::InvalidTradeSide(format!(
+                        "Unknown trade side: {}",
+                        trade.side
+                    )));
+                }
+            }
+        } else {
+            // position of that asset doesn't exist in the state
+
+            match trade.side {
+                0 => current_state
+                    .current_positions
+                    .insert(trade.asset.clone(), trade.quantity),
+                1 => current_state
+                    .current_positions
+                    .insert(trade.asset.clone(), -trade.quantity),
+                _ => {
+                    return Err(RisklyError::InvalidTradeSide(format!(
+                        "Unknown trade side: {}",
+                        trade.side
+                    )));
+                }
+            };
+        }
+
+        // Update daily volume
+        let current_volume = current_state
+            .daily_volume
+            .get(&trade.asset)
+            .cloned()
+            .unwrap_or(0.0);
+        current_state
+            .daily_volume
+            .insert(trade.asset.clone(), current_volume + trade.quantity);
+
+        if let Err(error) = self.state_tx.send(Ok(current_state.clone())) {
+            println!("Channel send error {error:?}");
+        };
+
         Ok(())
     }
 }

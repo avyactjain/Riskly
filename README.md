@@ -43,11 +43,15 @@ riskly/
 
 ### ✅ Implemented
 - **Trade Evaluation**: Pre-trade risk assessment with detailed rejection reasons
+- **Trade Recording**: `AddTrade` endpoint for recording executed trades and updating positions
+- **Real-time State Streaming**: `StreamState` endpoint provides live portfolio updates via server streaming
 - **Asset Whitelisting**: Configurable allowed trading instruments
 - **Position Limits**: Per-asset maximum position constraints
 - **Trade Size Limits**: Maximum trade size per order
 - **Daily Volume Limits**: 24-hour rolling volume restrictions
 - **Portfolio Allocation**: Percentage-based asset allocation limits
+- **Thread-safe State Management**: Concurrent access with Arc<Mutex<RisklyState>>
+- **Performance Instrumentation**: Detailed timing measurements for optimization
 - **gRPC API**: High-performance binary protocol for low-latency integration
 
 ### 🚧 In Development (Unimplemented Endpoints)
@@ -55,12 +59,10 @@ riskly/
 The following endpoints are defined in the proto but not yet implemented:
 
 #### State Management
-- `AddTrade` - Record executed trades and update positions
 - `GetState` - Retrieve complete portfolio state
 - `GetCurrentPosition` - Query specific asset positions
 - `GetOpenOrders` - List all pending orders
 - `GetDailyVolume` - Get trading volume by asset
-- `StreamState` - Real-time state updates via server streaming
 
 #### Order Management  
 - `AddOrder` - Register pending orders for position calculation
@@ -123,7 +125,7 @@ Create a `local.json` file to configure risk parameters:
 | `allowed_assets` | Tradeable asset whitelist | `["BTC", "ETH"]` |
 | `max_slippage_pct` | Maximum allowed slippage | `0.5` = 0.5% max slippage |
 | `trading_enabled` | Global trading circuit breaker | `false` = all trades rejected |
-| `listen_address` | gRPC server binding | `"0.0.0.0:50051"` |
+| `listen_address` | gRPC server binding | `"127.0.0.1:50052"` |
 
 ## Quick Start
 
@@ -155,7 +157,7 @@ Example gRPC client call for trade evaluation:
 use riskly::riskly_client::RisklyClient;
 use riskly::{Trade, TradeSide};
 
-let mut client = RisklyClient::connect("http://127.0.0.1:50051").await?;
+let mut client = RisklyClient::connect("http://127.0.0.1:50052").await?;
 
 let trade = Trade {
     asset: "BTC".to_string(),
@@ -173,20 +175,34 @@ if response.into_inner().allowed {
 }
 ```
 
-### Testing Trade Evaluation
+### Testing the Service
 
 ```bash
-# Using grpcurl to test the service
+# Test trade evaluation
 grpcurl -plaintext -d '{
     "asset": "BTC",
     "quantity": 0.1,
     "price": 45000.0,
     "side": "BUY",
     "timestamp": 1640995200
-}' 127.0.0.1:50051 riskly.Riskly/EvaluateTrade
+}' 127.0.0.1:50052 riskly.Riskly/EvaluateTrade
+
+# Test adding a trade (updates state)
+grpcurl -plaintext -d '{
+    "asset": "BTC",
+    "quantity": 0.1,
+    "price": 45000.0,
+    "side": "BUY",
+    "timestamp": 1640995200
+}' 127.0.0.1:50052 riskly.Riskly/AddTrade
+
+# Test real-time state streaming
+grpcurl -plaintext 127.0.0.1:50052 riskly.Riskly/StreamState
 ```
 
-## Risk Evaluation Logic
+## Core Functionality
+
+### Risk Evaluation Logic
 
 The `EvaluateTrade` endpoint performs comprehensive pre-trade risk checks:
 
@@ -198,13 +214,30 @@ The `EvaluateTrade` endpoint performs comprehensive pre-trade risk checks:
 
 All checks must pass for trade approval. Detailed rejection reasons are provided for failed evaluations.
 
+### Trade Recording & State Management
+
+The `AddTrade` endpoint:
+
+1. **Pre-validation**: Runs the same risk checks as `EvaluateTrade`
+2. **Position Updates**: Updates current positions based on trade side (buy/sell)
+3. **Volume Tracking**: Increments daily volume counters
+4. **State Broadcasting**: Sends updated state to all `StreamState` subscribers
+
+### Real-time State Streaming
+
+The `StreamState` endpoint provides live portfolio updates via server-sent streaming, allowing clients to monitor:
+- Current positions across all assets
+- Daily volume by asset
+- Open orders (when implemented)
+
 ## Dependencies
 
 - **tonic**: gRPC server/client framework
 - **prost**: Protocol Buffers runtime
 - **tokio**: Async runtime with multi-threading
+- **tokio-stream**: Streaming support for real-time state updates
 - **serde**: Configuration serialization
-- **tokio-stream**: Streaming support for real-time updates
+- **async-trait**: Async trait support
 
 ## Performance Characteristics
 
@@ -215,13 +248,22 @@ All checks must pass for trade approval. Detailed rejection reasons are provided
 
 ## Development Status
 
-This project is in active development. The core trade evaluation logic is functional, but many endpoints remain unimplemented. Contributions are welcome, particularly for:
+This project is in active development. Recent progress includes:
 
-- State management endpoints
+✅ **Recently Implemented**:
+- `AddTrade` endpoint with state management
+- `StreamState` real-time streaming functionality
+- Thread-safe state tracking with performance instrumentation
+
+🚧 **Upcoming Work**:
+- Remaining state query endpoints (`GetState`, `GetCurrentPosition`, etc.)
+- Order management (`AddOrder`, `RemoveOrder`)
 - Market data integration
 - Persistence layer
 - Monitoring & observability
 - Performance optimizations
+
+Contributions are welcome!
 
 ## License
 
